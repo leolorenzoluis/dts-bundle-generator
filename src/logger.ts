@@ -32,10 +32,36 @@ export function enableNormalLog(): void {
 	currentLogLevel = LogLevel.Normal;
 }
 
+let logDepth = 0;
+
+function increaseDepth(): void {
+	logDepth += 1;
+}
+
+function decreaseDepth(): void {
+	if (logDepth === 0) {
+		throw new Error('Cannot decrease log depth');
+	}
+
+	logDepth -= 1;
+}
+
+export function runWithIncreasingDepth<T>(fn: () => T): T {
+	increaseDepth();
+
+	try {
+		return fn();
+	} finally {
+		decreaseDepth();
+	}
+}
+
 function logMessage(message: string, level: LogLevel = LogLevel.Verbose): void {
 	if (level < currentLogLevel) {
 		return;
 	}
+
+	message = `${' '.repeat(2 * logDepth)}${message}`;
 
 	switch (level) {
 		case LogLevel.Error:

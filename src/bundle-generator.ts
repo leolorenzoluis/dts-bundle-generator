@@ -31,6 +31,7 @@ import { generateOutput } from './generate-output';
 
 import {
 	normalLog,
+	runWithIncreasingDepth,
 	verboseLog,
 } from './logger';
 
@@ -137,116 +138,118 @@ export function generateDtsBundle(entries: ReadonlyArray<EntryPointConfig>, opti
 	return entries.map((entry: EntryPointConfig) => {
 		normalLog(`Processing ${entry.filePath}`);
 
-		const newRootFilePath = rootFilesRemapping.get(entry.filePath);
-		if (newRootFilePath === undefined) {
-			throw new Error(`Cannot remap root source file ${entry.filePath}`);
-		}
-
-		const rootSourceFile = getRootSourceFile(program, newRootFilePath);
-		const rootSourceFileSymbol = typeChecker.getSymbolAtLocation(rootSourceFile);
-		if (rootSourceFileSymbol === undefined) {
-			throw new Error(`Symbol for root source file ${newRootFilePath} not found`);
-		}
-
-		const librariesOptions: LibrariesOptions = entry.libraries || {};
-
-		const criteria: ModuleCriteria = {
-			allowedTypesLibraries: librariesOptions.allowedTypesLibraries,
-			importedLibraries: librariesOptions.importedLibraries,
-			inlinedLibraries: librariesOptions.inlinedLibraries || [],
-			typeRoots: typeRoots,
-		};
-
-		const rootFileExports = getExportsForSourceFile(typeChecker, rootSourceFileSymbol);
-		const rootFileExportSymbols = rootFileExports.map((exp: SourceFileExport) => exp.symbol);
-
-		const collectionResult: CollectingResult = {
-			typesReferences: new Set<string>(),
-			imports: new Map<string, Set<string>>(),
-			statements: [],
-		};
-
-		const outputOptions: OutputOptions = entry.output || {};
-
-		const updateResultCommonParams = {
-			isStatementUsed: (statement: ts.Statement) => isNodeUsed(statement, rootFileExportSymbols, typesUsageEvaluator, typeChecker),
-			shouldStatementBeImported: (statement: ts.DeclarationStatement) => shouldNodeBeImported(statement, rootFileExportSymbols, typesUsageEvaluator),
-			shouldDeclareGlobalBeInlined: (currentModule: ModuleInfo) => Boolean(outputOptions.inlineDeclareGlobals) && currentModule.type === ModuleType.ShouldBeInlined,
-			getModuleInfo: (fileName: string) => getModuleInfo(fileName, criteria),
-			getDeclarationsForExportedAssignment: (exportAssignment: ts.ExportAssignment) => {
-				const symbolForExpression = typeChecker.getSymbolAtLocation(exportAssignment.expression);
-				if (symbolForExpression === undefined) {
-					return [];
-				}
-
-				const symbol = getActualSymbol(symbolForExpression, typeChecker);
-				return getDeclarationsForSymbol(symbol);
-			},
-		};
-
-		for (const sourceFile of sourceFiles) {
-			verboseLog(`\n\n======= Preparing file: ${sourceFile.fileName} =======`);
-
-			const prevStatementsCount = collectionResult.statements.length;
-			const updateFn = sourceFile === rootSourceFile ? updateResultForRootSourceFile : updateResult;
-			updateFn(
-				{
-					...updateResultCommonParams,
-					currentModule: getModuleInfo(sourceFile.fileName, criteria),
-					statements: sourceFile.statements,
-				},
-				collectionResult
-			);
-
-			if (collectionResult.statements.length === prevStatementsCount) {
-				verboseLog(`No output for file: ${sourceFile.fileName}`);
+		return runWithIncreasingDepth(() => {
+			const newRootFilePath = rootFilesRemapping.get(entry.filePath);
+			if (newRootFilePath === undefined) {
+				throw new Error(`Cannot remap root source file ${entry.filePath}`);
 			}
-		}
 
-		if (entry.failOnClass) {
-			const isClassStatementFound = collectionResult.statements.some((statement: ts.Statement) => ts.isClassDeclaration(statement));
-			if (isClassStatementFound) {
-				throw new Error('At least 1 class statement is found in generated dts.');
+			const rootSourceFile = getRootSourceFile(program, newRootFilePath);
+			const rootSourceFileSymbol = typeChecker.getSymbolAtLocation(rootSourceFile);
+			if (rootSourceFileSymbol === undefined) {
+				throw new Error(`Symbol for root source file ${newRootFilePath} not found`);
 			}
-		}
 
-		return generateOutput(
-			{
-				...collectionResult,
-				needStripDefaultKeywordForStatement: (statement: ts.Statement) => statement.getSourceFile() !== rootSourceFile,
-				shouldStatementHasExportKeyword: (statement: ts.Statement) => {
-					let result = true;
+			const librariesOptions: LibrariesOptions = entry.libraries || {};
 
-					if (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
-						const isStatementFromRootFile = statement.getSourceFile() === rootSourceFile;
-						const exportType = getExportTypeForDeclaration(rootFileExports, typeChecker, statement);
+			const criteria: ModuleCriteria = {
+				allowedTypesLibraries: librariesOptions.allowedTypesLibraries,
+				importedLibraries: librariesOptions.importedLibraries,
+				inlinedLibraries: librariesOptions.inlinedLibraries || [],
+				typeRoots: typeRoots,
+			};
 
-						const isExportedAsES6NamedExport = exportType === ExportType.ES6Named;
-						// the node should have `export` keyword if it is exported directly from root file (not transitive from other module)
-						const isExportedAsES6DefaultExport =
-							exportType === ExportType.ES6Default
-							&& isStatementFromRootFile
-							&& hasNodeModifier(statement, ts.SyntaxKind.ExportKeyword);
+			const rootFileExports = getExportsForSourceFile(typeChecker, rootSourceFileSymbol);
+			const rootFileExportSymbols = rootFileExports.map((exp: SourceFileExport) => exp.symbol);
 
-						// not every class, enum and function can be exported (only exported as es6 export from root file)
-						result = isExportedAsES6NamedExport || isExportedAsES6DefaultExport;
+			const collectionResult: CollectingResult = {
+				typesReferences: new Set<string>(),
+				imports: new Map<string, Set<string>>(),
+				statements: [],
+			};
 
-						if (ts.isEnumDeclaration(statement)) {
-							// const enum always can be exported
-							result = result || hasNodeModifier(statement, ts.SyntaxKind.ConstKeyword);
-						}
-					} else if (isDeclareGlobalStatement(statement) || ts.isExportDeclaration(statement)) {
-						result = false;
+			const outputOptions: OutputOptions = entry.output || {};
+
+			const updateResultCommonParams = {
+				isStatementUsed: (statement: ts.Statement) => isNodeUsed(statement, rootFileExportSymbols, typesUsageEvaluator, typeChecker),
+				shouldStatementBeImported: (statement: ts.DeclarationStatement) => shouldNodeBeImported(statement, rootFileExportSymbols, typesUsageEvaluator),
+				shouldDeclareGlobalBeInlined: (currentModule: ModuleInfo) => Boolean(outputOptions.inlineDeclareGlobals) && currentModule.type === ModuleType.ShouldBeInlined,
+				getModuleInfo: (fileName: string) => getModuleInfo(fileName, criteria),
+				getDeclarationsForExportedAssignment: (exportAssignment: ts.ExportAssignment) => {
+					const symbolForExpression = typeChecker.getSymbolAtLocation(exportAssignment.expression);
+					if (symbolForExpression === undefined) {
+						return [];
 					}
 
-					return result;
+					const symbol = getActualSymbol(symbolForExpression, typeChecker);
+					return getDeclarationsForSymbol(symbol);
 				},
-			},
-			{
-				sortStatements: outputOptions.sortNodes,
-				umdModuleName: outputOptions.umdModuleName,
+			};
+
+			for (const sourceFile of sourceFiles) {
+				verboseLog(`\n\n======= Preparing file: ${sourceFile.fileName} =======`);
+
+				const prevStatementsCount = collectionResult.statements.length;
+				const updateFn = sourceFile === rootSourceFile ? updateResultForRootSourceFile : updateResult;
+				updateFn(
+					{
+						...updateResultCommonParams,
+						currentModule: getModuleInfo(sourceFile.fileName, criteria),
+						statements: sourceFile.statements,
+					},
+					collectionResult
+				);
+
+				if (collectionResult.statements.length === prevStatementsCount) {
+					verboseLog(`No output for file: ${sourceFile.fileName}`);
+				}
 			}
-		);
+
+			if (entry.failOnClass) {
+				const isClassStatementFound = collectionResult.statements.some((statement: ts.Statement) => ts.isClassDeclaration(statement));
+				if (isClassStatementFound) {
+					throw new Error('At least 1 class statement is found in generated dts.');
+				}
+			}
+
+			return generateOutput(
+				{
+					...collectionResult,
+					needStripDefaultKeywordForStatement: (statement: ts.Statement) => statement.getSourceFile() !== rootSourceFile,
+					shouldStatementHasExportKeyword: (statement: ts.Statement) => {
+						let result = true;
+
+						if (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
+							const isStatementFromRootFile = statement.getSourceFile() === rootSourceFile;
+							const exportType = getExportTypeForDeclaration(rootFileExports, typeChecker, statement);
+
+							const isExportedAsES6NamedExport = exportType === ExportType.ES6Named;
+							// the node should have `export` keyword if it is exported directly from root file (not transitive from other module)
+							const isExportedAsES6DefaultExport =
+								exportType === ExportType.ES6Default
+								&& isStatementFromRootFile
+								&& hasNodeModifier(statement, ts.SyntaxKind.ExportKeyword);
+
+							// not every class, enum and function can be exported (only exported as es6 export from root file)
+							result = isExportedAsES6NamedExport || isExportedAsES6DefaultExport;
+
+							if (ts.isEnumDeclaration(statement)) {
+								// const enum always can be exported
+								result = result || hasNodeModifier(statement, ts.SyntaxKind.ConstKeyword);
+							}
+						} else if (isDeclareGlobalStatement(statement) || ts.isExportDeclaration(statement)) {
+							result = false;
+						}
+
+						return result;
+					},
+				},
+				{
+					sortStatements: outputOptions.sortNodes,
+					umdModuleName: outputOptions.umdModuleName,
+				}
+			);
+		});
 	});
 }
 
