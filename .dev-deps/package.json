@@ -1,9 +1,10 @@
 {
   "private": true,
   "scripts": {
-    "lint": "tslint --config ../tslint.json --project ../tsconfig.json",
-    "compile": "tsc --version && tsc --project ../tsconfig.json",
-    "compile-tests": "tsc --project ../tsconfig.tests.json",
+    "lint": "tslint --config ../tslint.json --project ../tsconfig.settings.json",
+    "compile": "tsc --version && tsc -b ../src",
+    "compile-release": "tsc -b ../tsconfig.release.json",
+    "compile-tests": "tsc -b ../tests",
     "check-dts-config": "tsc --lib es2015 --allowJs --noEmit ../dts-config.js"
   },
   "devDependencies": {

@@ -1,6 +1,15 @@
 {
-	"extends": "../tsconfig.base.json",
+	"extends": "../tsconfig.settings.json",
+	"references": [
+		{ "path": "../src" }
+	],
 	"compilerOptions": {
-		"declaration": true
-	}
+		"composite": true
+	},
+	"include": [
+		"functional-test-cases.ts",
+		"test-cases/test-case-config.ts",
+		"test-cases/**/config.ts",
+		"unittests/**/*.ts"
+	]
 }
